@@ -1,0 +1,222 @@
+<div style="max-width:400px;">
+  <h2 style="margin:0 0 16px;">Beállítások</h2>
+  <label for="diak-neve" style="display:block; margin-bottom:6px; color:var(--text-dim); font-size:0.9rem;">
+    Diák neve
+  </label>
+  <input
+    id="diak-neve"
+    list="diak-neve-list"
+    autocomplete="off"
+    style="width:100%; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:1rem;"
+  >
+  <span id="saved-flash" class="saved-flash">✓ Mentve</span>
+  <datalist id="diak-neve-list"></datalist>
+  <div id="no-access-notice" style="display:none; margin-top:14px; padding:10px 12px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text-dim); font-size:0.85rem;">
+    Nincs hozzáférésed az adatbázishoz - a neved elmenthető, de a többi funkció (Kezdőlap, Statisztika, Ranglista) addig nem lesz elérhető.
+  </div>
+
+  <div style="margin-top:28px; padding-top:20px; border-top:1px solid var(--border);">
+    <h2 style="margin:0 0 4px;">Naptár szinkronizálás</h2>
+    <p style="margin:0 0 16px; color:var(--text-dim); font-size:0.85rem;">
+      A beosztásod automatikusan bekerül a kiválasztott naptáradba, 5 percenként frissítve. A szinkronizálás csak a
+      <code style="background:var(--bg); padding:1px 5px; border-radius:4px;">#decathlondiak</code>
+      jelölésű eseményeket hozza létre, frissíti vagy törli - minden más esemény a naptáradban érintetlen marad.
+    </p>
+
+    <div id="sync-blocked-notice" style="display:none; padding:10px 12px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text-dim); font-size:0.85rem;"></div>
+
+    <div id="sync-controls" style="display:none; align-items:center; gap:10px; flex-wrap:wrap;">
+      <select id="sync-calendar-select" style="flex:1; min-width:180px; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:0.95rem;"></select>
+      <button id="sync-toggle-btn" style="background:var(--accent); color:#fff; border:none; padding:10px 16px; border-radius:6px; cursor:pointer; font-size:0.9rem; font-weight:600; white-space:nowrap;">Bekapcsolás</button>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+      <button id="sync-now-btn" style="display:none; background:none; border:1px solid var(--border); color:var(--text); padding:8px 14px; border-radius:6px; cursor:pointer; font-size:0.82rem;">
+        Szinkronizálás
+      </button>
+      <button id="sync-clear-btn" style="display:none; background:none; border:1px solid var(--border); color:var(--text-dim); padding:8px 14px; border-radius:6px; cursor:pointer; font-size:0.82rem;">
+        Események törlése
+      </button>
+    </div>
+    <span id="sync-saved-flash" class="saved-flash">✓ Mentve</span>
+  </div>
+</div>
+
+<script>
+  (function() {
+    var input = document.getElementById('diak-neve');
+    var list = document.getElementById('diak-neve-list');
+    var savedFlash = document.getElementById('saved-flash');
+
+    var blockedNotice = document.getElementById('sync-blocked-notice');
+    var controls = document.getElementById('sync-controls');
+    var select = document.getElementById('sync-calendar-select');
+    var toggleBtn = document.getElementById('sync-toggle-btn');
+    var nowBtn = document.getElementById('sync-now-btn');
+    var clearBtn = document.getElementById('sync-clear-btn');
+    var syncFlash = document.getElementById('sync-saved-flash');
+
+    var TOGGLE_LABELS = { off: 'Bekapcsolás', on: 'Kikapcsolás' };
+    var NOW_LABEL = 'Szinkronizálás';
+    var CLEAR_LABEL = 'Események törlése';
+    var enabled = false; // set for real once applySettingsData_ runs
+
+    // Show the cached name instantly if we have it, avoiding an empty-field flash.
+    if (appState.diakNeve !== null) {
+      input.value = appState.diakNeve;
+    }
+
+    function applyToggleState_() {
+      toggleBtn.textContent = enabled ? TOGGLE_LABELS.on : TOGGLE_LABELS.off;
+      toggleBtn.style.background = enabled ? 'var(--border)' : 'var(--accent)';
+      toggleBtn.style.color = enabled ? 'var(--text)' : '#fff';
+      select.disabled = enabled;
+    }
+
+    /**
+     * Renders a getSettingsData() payload into the DOM. Safe to call more
+     * than once - on a cache hit (instant) and again once the background
+     * refetch resolves (see below) - since it only ever updates values,
+     * never (re)attaches event listeners. Listeners are wired exactly once,
+     * further down, so calling this twice can't double-fire an action.
+     */
+    function applySettingsData_(data) {
+      input.value = data.diakNeve || '';
+      setDiakNeveCached(data.diakNeve || '');
+
+      list.innerHTML = '';
+      data.names.forEach(function(name) {
+        var option = document.createElement('option');
+        option.value = name;
+        list.appendChild(option);
+      });
+
+      if (data.sync.blockedReason) {
+        blockedNotice.style.display = 'block';
+        blockedNotice.textContent = data.sync.blockedReason === 'no-access'
+          ? 'Nincs hozzáférésed az adatbázishoz, ezért a szinkronizálás nem elérhető.'
+          : 'Előbb állítsd be a fenti neved a szinkronizálás bekapcsolásához.';
+        controls.style.display = 'none';
+        nowBtn.style.display = 'none';
+        clearBtn.style.display = 'none';
+        return;
+      }
+
+      blockedNotice.style.display = 'none';
+      controls.style.display = 'flex';
+      nowBtn.style.display = data.calendars.length ? 'inline-block' : 'none';
+      clearBtn.style.display = data.calendars.length ? 'inline-block' : 'none';
+
+      select.innerHTML = '';
+      data.calendars.forEach(function(cal) {
+        var option = document.createElement('option');
+        option.value = cal.id;
+        option.textContent = cal.name;
+        select.appendChild(option);
+      });
+      if (data.sync.calendarId) select.value = data.sync.calendarId;
+
+      enabled = data.sync.enabled;
+      applyToggleState_();
+    }
+
+    // Kept in appState (Index.html), not a local var, so it survives
+    // navigating away from Settings and back, and so the background
+    // preload pass (Index.html's preloadRemainingPages_, which mounts this
+    // page into a hidden container on startup) actually warms it up -
+    // without this, the calendar picker/buttons always waited on a fresh
+    // round trip no matter how many times the page had already loaded.
+    if (appState.settingsCache) {
+      applySettingsData_(appState.settingsCache); // instant, no loading flash
+    }
+
+    // Always fetches, even on a cache hit, to keep data fresh.
+    runScript('getSettingsData').then(function(data) {
+      appState.settingsCache = data;
+      applySettingsData_(data);
+    });
+
+    // Fires on Enter or on blur after a change - no separate save button needed.
+    input.addEventListener('change', function() {
+      runScript('saveDiakNeve', input.value.trim()).then(function() {
+        setDiakNeveCached(input.value.trim());
+        savedFlash.classList.add('show');
+        setTimeout(function() { savedFlash.classList.remove('show'); }, 1500);
+      });
+    });
+
+    // Non-blocking - name-saving works via User Properties regardless of
+    // sheet access, so the form itself stays usable either way.
+    getHasAccessCached(function(hasAccess) {
+      if (!hasAccess) {
+        document.getElementById('no-access-notice').style.display = 'block';
+      }
+    });
+
+    toggleBtn.addEventListener('click', function() {
+      if (!enabled && !select.value) return; // nothing to pick from
+
+      toggleBtn.textContent = 'Mentés…';
+      setButtonState(toggleBtn, true);
+      var request = enabled ? runScript('disableSync') : runScript('enableSync', select.value);
+
+      request.then(function(result) {
+        setButtonState(toggleBtn, false);
+        if (!result.success) { applyToggleState_(); return; } // e.g. a precondition slipped since page load - restore current label
+
+        var newCalendarId = enabled ? null : select.value; // disable clears it server-side; enable sets it
+        enabled = !enabled;
+        applyToggleState_();
+
+        if (appState.settingsCache) {
+          appState.settingsCache.sync.enabled = enabled;
+          appState.settingsCache.sync.calendarId = newCalendarId;
+        }
+
+        syncFlash.classList.add('show');
+        setTimeout(function() { syncFlash.classList.remove('show'); }, 1500);
+      }).catch(function() {
+        setButtonState(toggleBtn, false);
+        applyToggleState_();
+      });
+    });
+
+    // Clears tagged events from whichever calendar is currently selected
+    // in the dropdown - works whether or not sync is actively on for it,
+    // so the user can reset a calendar before pointing sync elsewhere.
+    clearBtn.addEventListener('click', function() {
+      if (!select.value) return;
+
+      clearBtn.textContent = 'Törlés folyamatban…';
+      setButtonState(clearBtn, true);
+      runScript('clearSyncedEvents', select.value).then(function(result) {
+        setButtonState(clearBtn, false);
+        clearBtn.textContent = CLEAR_LABEL;
+        if (!result.success) return;
+        syncFlash.classList.add('show');
+        setTimeout(function() { syncFlash.classList.remove('show'); }, 1500);
+      }).catch(function() {
+        setButtonState(clearBtn, false);
+        clearBtn.textContent = CLEAR_LABEL;
+      });
+    });
+
+    // Forces an immediate one-off sync against the selected calendar,
+    // independent of whether automatic sync is turned on for it.
+    nowBtn.addEventListener('click', function() {
+      if (!select.value) return;
+
+      nowBtn.textContent = 'Szinkronizálás folyamatban…';
+      setButtonState(nowBtn, true);
+      runScript('runSyncNow', select.value).then(function(result) {
+        setButtonState(nowBtn, false);
+        nowBtn.textContent = NOW_LABEL;
+        if (!result.success) return;
+        syncFlash.classList.add('show');
+        setTimeout(function() { syncFlash.classList.remove('show'); }, 1500);
+      }).catch(function() {
+        setButtonState(nowBtn, false);
+        nowBtn.textContent = NOW_LABEL;
+      });
+    });
+  })();
+</script>

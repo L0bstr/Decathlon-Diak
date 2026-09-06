@@ -1,0 +1,155 @@
+<div style="text-align:center; padding: 32px 0 20px; color: var(--text);">
+  <div id="stats-body"></div>
+</div>
+
+<script>
+  (function() {
+    // Kept in sync manually with HUNGARIAN_MONTHS_ in Parse.gs - inherent to
+    // the server/client split, since client code can't reuse a server var.
+    var HUNGARIAN_MONTHS = [
+      'Január', 'Február', 'Március', 'Április', 'Május', 'Június',
+      'Július', 'Augusztus', 'Szeptember', 'Október', 'November', 'December'
+    ];
+
+    function tabNameForDate(date) {
+      return date.getFullYear() + ' ' + HUNGARIAN_MONTHS[date.getMonth()];
+    }
+
+    // See Home.html for why this guard exists - a background preload render
+    // must not steal appState.activePageController from the visible page.
+    var mountedInApp = document.getElementById('app').contains(document.getElementById('stats-body'));
+    if (mountedInApp) appState.activePageController = null;
+
+    getHasAccessCached(function(hasAccess) {
+      if (!hasAccess) {
+        document.getElementById('stats-body').innerHTML = renderNoAccessMessageHtml();
+        return;
+      }
+
+      getDiakNeveCached(function(name) {
+        if (name) {
+          renderStatsCard(name);
+        } else {
+          renderNoNameMessage();
+        }
+      });
+    });
+
+    function renderNoNameMessage() {
+      document.getElementById('stats-body').innerHTML = renderNoNameMessageHtml();
+    }
+
+    function renderStatsCard(studentName) {
+      document.getElementById('stats-body').innerHTML = `
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; width:100%; margin:0 auto; padding:18px;">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            ${arrowButtonHtml('month-prev', 'prev')}
+            <span id="month-title" style="font-weight:700; font-size:1.15rem;"></span>
+            ${arrowButtonHtml('month-next', 'next')}
+          </div>
+          <div id="stats-table" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border); text-align:left;"></div>
+        </div>
+      `;
+
+      var today = new Date();
+      var previousMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      var nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+      var months = [tabNameForDate(previousMonth), tabNameForDate(today), tabNameForDate(nextMonth)];
+
+      var index = 1; // default to the current month
+
+      var titleEl = document.getElementById('month-title');
+      var tableEl = document.getElementById('stats-table');
+      var prevBtn = document.getElementById('month-prev');
+      var nextBtn = document.getElementById('month-next');
+
+      // Kept in appState (Index.html), not a local var, so it survives
+      // navigating away from Statisztika and back - same pattern as Home's
+      // dayInfoCache.
+      var statsCache = appState.statsCache;
+      var requestToken = 0;
+
+      function row(emoji, label, valueHtml) {
+        return '<tr>' +
+          '<td style="padding:10px 0; border-bottom:1px solid var(--border); font-weight:600; width:44%;">' + emoji + ' ' + label + '</td>' +
+          '<td style="padding:10px 0 10px 16px; border-bottom:1px solid var(--border); text-align:right; width:56%;">' + valueHtml + '</td>' +
+        '</tr>';
+      }
+
+      function renderTable(stats) {
+        if (!stats) {
+          tableEl.innerHTML = '<p style="color:var(--text-dim); margin:0;">Nincs adat erre a hónapra.</p>';
+          return;
+        }
+
+        function hoursWithPay(hours, ft) {
+          return hours + ' óra <span style="color:var(--text-dim); font-size:0.85em;">(' +
+            Math.round(ft).toLocaleString('hu-HU') + ' Ft)</span>';
+        }
+
+        var hoursRow = row('⏱️', 'Munkaidő', hoursWithPay(stats.hoursPlanned, stats.payPlanned));
+
+        var blendedRate = stats.hoursPlanned ? Math.round(stats.payPlanned / stats.hoursPlanned) : 0;
+
+        tableEl.innerHTML =
+          '<table style="width:100%; border-collapse:collapse; table-layout:fixed;">' +
+            hoursRow +
+            row('📅', 'Munka napok', stats.daysWorked + ' nap') +
+            row('📏', 'Átlagos műszakhossz', stats.avgShiftHours.toFixed(1) + ' óra') +
+            row('💰', 'Átlag Ft/Óra', blendedRate.toLocaleString('hu-HU') + ' Ft/óra') +
+            row('☀️', 'Legtöbbet fizetett napok (vasárnap)', stats.sundaysWorked + ' nap') +
+            row('🔥', 'Leghosszabb egymást követő munkanapok', stats.longestStreak + ' nap') +
+            row('⭐', 'Kedvenc terület', escapeHtml(stats.favoriteArea) || 'Nincs adat') +
+          '</table>';
+      }
+
+      function fetchIntoCache(tabName) {
+        return runScript('getMonthStats', tabName, studentName).then(function(stats) {
+          statsCache[tabName] = stats;
+          return stats;
+        });
+      }
+
+      function render() {
+        var tabName = months[index];
+        var myToken = ++requestToken;
+
+        titleEl.textContent = tabName;
+        setButtonState(prevBtn, index <= 0);
+        setButtonState(nextBtn, index >= months.length - 1);
+
+        if (tabName in statsCache) {
+          renderTable(statsCache[tabName]); // instant, no loading flash
+        } else {
+          tableEl.innerHTML = '<p style="color:var(--text-dim); margin:0;">Betöltés…</p>';
+        }
+
+        // Always fetches, even on a cache hit, to keep data fresh - but only
+        // applies the result to the UI if the user hasn't switched months since.
+        fetchIntoCache(tabName).then(function(stats) {
+          if (myToken === requestToken) renderTable(stats);
+        });
+      }
+
+      prevBtn.addEventListener('click', function() {
+        if (index > 0) { index--; render(); }
+      });
+
+      nextBtn.addEventListener('click', function() {
+        if (index < months.length - 1) { index++; render(); }
+      });
+
+      // Only 2 possible tabs ever exist here, so just prefetch both up front
+      // instead of a radius-based scheme like Home's day cache.
+      months.forEach(function(tabName) {
+        if (!(tabName in statsCache)) {
+          fetchIntoCache(tabName).catch(function() { /* best-effort prefetch, ignore failures */ });
+        }
+      });
+
+      if (mountedInApp) appState.activePageController = render;
+
+      render();
+    }
+  })();
+</script>

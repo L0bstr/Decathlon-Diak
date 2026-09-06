@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    :root {
+      --bg: #14181c;
+      --surface: #1c2126;
+      --border: #2a3037;
+      --text: #e8ebee;
+      --text-dim: #8b95a1;
+      --accent: #0082c3; /* Decathlon blue */
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+    }
+
+    .navbar {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 14px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .navbar__title {
+      font-weight: 600;
+      font-size: 1.1rem;
+      letter-spacing: 0.02em;
+      margin-right: auto;
+    }
+
+    .navbar__title span {
+      color: var(--accent);
+    }
+
+    .nav-items {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .nav-item {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 0.95rem;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .nav-item:hover {
+      background: var(--border);
+      color: var(--text);
+    }
+
+    .nav-item.active {
+      color: var(--text);
+      background: var(--border);
+    }
+
+    #app {
+      padding: 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    @media (max-width: 600px) {
+      #app { padding: 14px 8px; }
+    }
+
+    .spinner {
+      width: 28px;
+      height: 28px;
+      margin: 60px auto;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .update-banner {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 8px 16px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.85rem;
+      text-align: center;
+      flex-wrap: wrap;
+    }
+
+    .update-banner button {
+      background: #fff;
+      color: var(--accent);
+      border: none;
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .refresh-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+    }
+
+    .refresh-btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .refresh-btn svg {
+      transition: transform 0.4s ease;
+    }
+
+    .refresh-btn.spinning svg {
+      animation: spin 0.7s linear infinite;
+    }
+
+    .saved-flash {
+      display: inline-block;
+      margin-left: 10px;
+      color: #4caf50;
+      font-size: 0.85rem;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      vertical-align: middle;
+    }
+
+    .saved-flash.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="update-banner" class="update-banner">
+    <span>Elérhető egy újabb verzió az alkalmazásból.</span>
+    <button id="update-banner-btn">Megtekintés</button>
+  </div>
+
+  <nav class="navbar">
+    <div class="navbar__title">Decathlon <span>Diák</span></div>
+    <div class="nav-items">
+      <button class="nav-item active" data-page="Home">Kezdőlap</button>
+      <button class="nav-item" data-page="Statisztika">Statisztika</button>
+      <button class="nav-item" data-page="Ranglista">Ranglista</button>
+      <button class="nav-item" data-page="Settings">Beállítások</button>
+    </div>
+    <button id="refresh-db-btn" class="refresh-btn" style="display:none;" title="Adatbázis frissítése">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+      <span id="refresh-db-label">Frissítés</span>
+    </button>
+  </nav>
+
+  <div id="app"></div>
+
+  <script>
+    // Injected by doGet() at render time - comparing URLs server-side since
+    // the client can't reliably read its own URL from inside the sandboxed
+    // iframe (google.script.url.getLocation() has no usable href).
+    var LATEST_VERSION_URL = <?!= JSON.stringify(latestVersionUrl) ?>;
+    var CURRENT_URL = <?!= JSON.stringify(currentUrl) ?>;
+
+    var pageCache = {};
+
+    // Shared client-side state, readable/writable by any page's own <script>
+    // since all pages run in this same document/global scope.
+    // activePageController: set by whichever page is currently mounted into
+    // #app (Home/Statisztika/Ranglista) to a zero-arg function that refetches
+    // just that page's data in place, without tearing down the page shell.
+    // Used by the frissítés button so it doesn't cause a full page reload.
+    var appState = { diakNeve: null, hasAccess: null, dayInfoCache: {}, statsCache: {}, leaderboardCache: {}, settingsCache: null, activePageController: null };
+
+    function getDiakNeveCached(callback) {
+      if (appState.diakNeve !== null) {
+        callback(appState.diakNeve);
+        return;
+      }
+      google.script.run.withSuccessHandler(function(name) {
+        appState.diakNeve = name || '';
+        callback(appState.diakNeve);
+      }).getDiakNeve();
+    }
+
+    function getHasAccessCached(callback) {
+      if (appState.hasAccess !== null) {
+        callback(appState.hasAccess);
+        return;
+      }
+      runScript('hasSheetAccess').then(function(result) {
+        appState.hasAccess = !!result;
+        callback(appState.hasAccess);
+      });
+    }
+
+    function setDiakNeveCached(name) {
+      if (name !== appState.diakNeve) {
+        clearCache_(appState.dayInfoCache);
+        clearCache_(appState.statsCache);
+      }
+      appState.diakNeve = name;
+    }
+
+    // Empties an object in place (rather than reassigning appState.xCache to
+    // a new object) so pages that already captured a reference to it (e.g.
+    // `var dayInfoCache = appState.dayInfoCache` in Home.html) see it emptied too.
+    function clearCache_(cache) {
+      Object.keys(cache).forEach(function(key) { delete cache[key]; });
+    }
+
+    // Promisifies google.script.run so page scripts can use async/await
+    // instead of nested callbacks. Shared here so every page can reuse it.
+    function runScript(fnName) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return new Promise(function(resolve, reject) {
+        var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+        runner[fnName].apply(runner, args);
+      });
+    }
+
+    // Shared across pages (Home.html, Statisztika.html) to avoid duplicating
+    // identical markup/logic in each page's own <script>.
+
+    function renderNoNameMessageHtml() {
+      return `
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:24px; max-width:480px; margin:0 auto;">
+          <p style="color:var(--text-dim); margin:0 0 16px;">A funkció használatához előbb állítsd be a neved.</p>
+          <button onclick="goToPage('Settings')" style="background:var(--accent); color:#fff; border:none; padding:10px 18px; border-radius:6px; cursor:pointer; font-size:0.95rem;">
+            Beállítások megnyitása
+          </button>
+        </div>
+      `;
+    }
+
+    function renderNoAccessMessageHtml() {
+      return `
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:24px; max-width:480px; margin:0 auto;">
+          <p style="color:var(--text-dim); margin:0;">Nincs hozzáférésed az adatbázishoz, ezért ezt a funkciót nem tudod használni. Kérj hozzáférést a beosztást kezelő táblázathoz.</p>
+        </div>
+      `;
+    }
+
+    function setButtonState(btn, disabled) {
+      btn.disabled = disabled;
+      btn.style.opacity = disabled ? 0.3 : 1;
+      btn.style.cursor = disabled ? 'default' : 'pointer';
+    }
+
+    function progressBar(fraction) {
+      var pct = Math.round(Math.min(Math.max(fraction, 0), 1) * 100);
+      return '<div style="margin-top:6px; height:6px; width:100%; background:var(--border); border-radius:3px; overflow:hidden;">' +
+        '<div style="height:100%; width:' + pct + '%; background:#4caf50;"></div>' +
+      '</div>';
+    }
+
+    // direction: 'prev' or 'next'. Returns a chevron nav button with the given id.
+    function arrowButtonHtml(id, direction) {
+      var points = direction === 'prev' ? '15 18 9 12 15 6' : '9 18 15 12 9 6';
+      return '<button id="' + id + '" style="background:none; border:none; color:var(--text); cursor:pointer; padding:6px 10px; border-radius:6px; display:flex;">' +
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="' + points + '"></polyline></svg>' +
+      '</button>';
+    }
+
+    // Escapes text pulled from spreadsheet cells (names, area labels) before
+    // it's concatenated into innerHTML strings, to prevent stored-HTML injection.
+    function escapeHtml(str) {
+      return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function renderPage(app, html) {
+      app.innerHTML = html;
+      // innerHTML doesn't execute <script> tags - re-insert them so pages can run their own JS.
+      app.querySelectorAll('script').forEach(function(oldScript) {
+        var newScript = document.createElement('script');
+        newScript.textContent = oldScript.textContent;
+        oldScript.replaceWith(newScript);
+      });
+    }
+
+    // Fetches a page's HTML (fire-and-forget promise), caching it in
+    // pageCache. Shared by loadPage (visible navigation) and
+    // preloadRemainingPages_ (silent background warm-up).
+    function fetchPageHtml(name) {
+      if (pageCache[name]) return Promise.resolve(pageCache[name]);
+      return runScript('getPage', name).then(function(html) {
+        pageCache[name] = html;
+        return html;
+      });
+    }
+
+    function loadPage(name) {
+      var app = document.getElementById('app');
+
+      if (pageCache[name]) {
+        renderPage(app, pageCache[name]);
+        return;
+      }
+
+      app.innerHTML = '<div class="spinner"></div>';
+      fetchPageHtml(name).then(function(html) {
+        renderPage(app, html);
+      });
+    }
+
+    function goToPage(name) {
+      document.querySelectorAll('.nav-item[data-page]').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.page === name);
+      });
+      loadPage(name);
+    }
+
+    // Silently warms up every non-Home page on startup: fetches each page's
+    // HTML and renders it into a hidden, detached container so that page's
+    // own <script> runs exactly as it would on a real visit, populating
+    // pageCache and its data caches (statsCache/leaderboardCache/etc) ahead
+    // of time. Sequential, not parallel, because Statisztika and Ranglista
+    // both use ids like "month-title" - two copies in the DOM at once would
+    // collide via getElementById.
+    function preloadRemainingPages_() {
+      var hidden = document.createElement('div');
+      hidden.style.display = 'none';
+      document.body.appendChild(hidden);
+
+      var pages = ['Statisztika', 'Ranglista', 'Settings'];
+
+      pages.reduce(function(chain, name) {
+        return chain.then(function() {
+          return fetchPageHtml(name).then(function(html) {
+            renderPage(hidden, html);
+          }).catch(function() { /* best-effort preload, ignore failures - don't block the rest of the chain */ });
+        });
+      }, Promise.resolve()).finally(function() {
+        hidden.remove();
+      });
+    }
+
+    document.querySelectorAll('.nav-item[data-page]').forEach(function(btn) {
+      btn.addEventListener('click', function() { goToPage(btn.dataset.page); });
+    });
+
+    // Manual "update database" button - global 30s cooldown enforced server-side;
+    // this timer just gives the user visible feedback while it's on cooldown.
+    var refreshBtn = document.getElementById('refresh-db-btn');
+    var refreshLabel = document.getElementById('refresh-db-label');
+    var refreshCountdownTimer = null;
+
+    function startRefreshCountdown(seconds) {
+      clearInterval(refreshCountdownTimer);
+      refreshBtn.disabled = true;
+
+      var remaining = seconds;
+      refreshLabel.textContent = remaining + 's';
+
+      refreshCountdownTimer = setInterval(function() {
+        remaining--;
+        if (remaining <= 0) {
+          clearInterval(refreshCountdownTimer);
+          refreshBtn.disabled = false;
+          refreshLabel.textContent = 'Frissítés';
+        } else {
+          refreshLabel.textContent = remaining + 's';
+        }
+      }, 1000);
+    }
+
+    refreshBtn.addEventListener('click', function() {
+      refreshBtn.classList.add('spinning');
+      startRefreshCountdown(30); // optimistic - resynced below if the server disagrees
+
+      runScript('requestManualRefresh').then(function(result) {
+        refreshBtn.classList.remove('spinning');
+
+        if (result.success) {
+          // Fresh data on the server now - drop everything cached client-side
+          // and re-render the current page so it's reflected immediately.
+          // Countdown keeps running: a success also starts the same 30s
+          // server-side cooldown, so the button should stay disabled.
+          clearCache_(appState.dayInfoCache);
+          clearCache_(appState.statsCache);
+          clearCache_(appState.leaderboardCache);
+          if (appState.activePageController) {
+            appState.activePageController();
+          } else {
+            var activePage = document.querySelector('.nav-item.active');
+            goToPage(activePage ? activePage.dataset.page : 'Home');
+          }
+        } else if (result.secondsRemaining) {
+          // Resync in case the optimistic 30s guess didn't match reality.
+          startRefreshCountdown(result.secondsRemaining);
+        } else {
+          clearInterval(refreshCountdownTimer);
+          refreshBtn.disabled = false;
+          refreshLabel.textContent = 'Frissítés';
+        }
+      }).catch(function() {
+        // No server-side cooldown was actually set on a network failure.
+        refreshBtn.classList.remove('spinning');
+        clearInterval(refreshCountdownTimer);
+        refreshBtn.disabled = false;
+        refreshLabel.textContent = 'Frissítés';
+      });
+    });
+
+    getHasAccessCached(function(hasAccess) {
+      refreshBtn.style.display = hasAccess ? 'flex' : 'none';
+    });
+
+    // "Newer version available" banner - only shown if a LatestVersionUrl is
+    // set AND it differs from the URL actually deployed (both computed
+    // server-side in doGet, see LATEST_VERSION_URL/CURRENT_URL above).
+    function checkForNewerVersion() {
+      if (!LATEST_VERSION_URL || LATEST_VERSION_URL === CURRENT_URL) return;
+
+      var banner = document.getElementById('update-banner');
+      banner.style.display = 'flex';
+      document.getElementById('update-banner-btn').addEventListener('click', function() {
+        top.location.href = LATEST_VERSION_URL;
+      });
+    }
+    checkForNewerVersion();
+
+    goToPage('Home');
+    preloadRemainingPages_();
+  </script>
+</body>
+</html>

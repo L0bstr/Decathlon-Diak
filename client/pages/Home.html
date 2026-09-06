@@ -1,0 +1,248 @@
+<div style="text-align:center; padding: 32px 0 20px; color: var(--text);">
+  <h1 id="home-greeting" style="margin:0 0 28px; font-size: 1.8rem;">Szia! 👋</h1>
+
+  <div id="home-body"></div>
+</div>
+
+<script>
+  (function() {
+    // Must be declared before getDiakNeveCached() runs its callback - that
+    // callback can fire synchronously (cached name), which would otherwise
+    // hit these while still `undefined` due to var hoisting.
+    var MONTH_ABBR = ['Jan', 'Feb', 'Márc', 'Ápr', 'Máj', 'Jún', 'Júl', 'Aug', 'Szept', 'Okt', 'Nov', 'Dec'];
+    var PREFETCH_RADIUS = 4;
+
+    // Only the copy of this script running inside the visible #app should
+    // own appState.activePageController - a background preload render (into
+    // a hidden detached container) must not hijack the frissítés button's
+    // refresh target away from whatever page the user is actually looking at.
+    var mountedInApp = document.getElementById('app').contains(document.getElementById('home-greeting'));
+    if (mountedInApp) appState.activePageController = null;
+
+    getHasAccessCached(function(hasAccess) {
+      if (!hasAccess) {
+        document.getElementById('home-body').innerHTML = renderNoAccessMessageHtml();
+        return;
+      }
+
+      getDiakNeveCached(function(name) {
+        if (name) {
+          document.getElementById('home-greeting').textContent = 'Szia, ' + name + '! 👋';
+          renderDayCard(name);
+        } else {
+          renderNoNameMessage();
+        }
+      });
+    });
+
+    function renderNoNameMessage() {
+      document.getElementById('home-body').innerHTML = renderNoNameMessageHtml();
+    }
+
+    function renderDayCard(studentName) {
+      document.getElementById('home-body').innerHTML = `
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; width:100%; margin:0 auto; padding:18px;">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            ${arrowButtonHtml('day-prev', 'prev')}
+            <span style="display:flex; align-items:center;">
+              <button id="today-btn" title="Ugrás a mai napra" style="display:none; margin-right:10px; background:var(--surface); border:1px solid var(--accent); color:var(--accent); cursor:pointer; padding:4px 12px; border-radius:6px; font-size:0.8rem; font-weight:600;">Ma</button>
+              <span id="day-title" style="font-weight:700; font-size:1.15rem;"></span>
+              <span id="day-status" style="display:none; margin-left:10px; font-size:0.75rem; font-weight:700; padding:4px 12px; border-radius:20px;"></span>
+            </span>
+            ${arrowButtonHtml('day-next', 'next')}
+          </div>
+          <div id="day-details" style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border); text-align:left;"></div>
+        </div>
+      `;
+
+      var today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      var min = new Date(today.getFullYear(), today.getMonth() - 1, 1); // first day of previous month
+      var max = new Date(today.getFullYear(), today.getMonth() + 2, 0); // last day of next month
+      var current = new Date(today);
+
+      var titleEl = document.getElementById('day-title');
+      var statusEl = document.getElementById('day-status');
+      var todayBtn = document.getElementById('today-btn');
+      var detailsEl = document.getElementById('day-details');
+      var prevBtn = document.getElementById('day-prev');
+      var nextBtn = document.getElementById('day-next');
+
+      var CHIP_COLORS = {
+        blue:   { bg: 'rgba(59,130,246,0.18)',  fg: '#93c5fd' },
+        purple: { bg: 'rgba(168,85,247,0.18)',  fg: '#d8b4fe' },
+        green:  { bg: 'rgba(34,197,94,0.18)',   fg: '#86efac' },
+        amber:  { bg: 'rgba(245,158,11,0.18)',  fg: '#fcd34d' }
+      };
+
+      // Cache of getDayInfo results by ISO date, kept in appState (Index.html)
+      // so it survives navigating away from Home and back - only the local
+      // requestToken resets on each load, since sequencing only matters within
+      // a single visit.
+      var dayInfoCache = appState.dayInfoCache;
+      var requestToken = 0;
+
+      function pad(n) { return String(n).padStart(2, '0'); }
+
+      function isoOf(date) {
+        return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+      }
+
+      function clamp(date) {
+        if (date.getTime() < min.getTime()) return new Date(min);
+        if (date.getTime() > max.getTime()) return new Date(max);
+        return date;
+      }
+
+      // `label` may contain inline HTML (e.g. a non-uppercased span) - it is
+      // not escaped, so never pass raw user input into it.
+      function chip(colorName, label) {
+        var c = CHIP_COLORS[colorName];
+        return '<span style="display:inline-block; justify-self:start; background:' + c.bg + '; color:' + c.fg + '; ' +
+          'font-size:0.68rem; font-weight:700; letter-spacing:0.03em; text-transform:uppercase; ' +
+          'padding:4px 10px; border-radius:20px; white-space:nowrap;">' + label + '</span>';
+      }
+
+      // Emits two grid cells (label, value) rather than its own row wrapper,
+      // so every row's label column lines up automatically via the parent grid.
+      function chipRow(colorName, label, valueHtml) {
+        return chip(colorName, label) + '<div>' + valueHtml + '</div>';
+      }
+
+      function chipGrid(rowsHtml) {
+        return '<div style="display:grid; grid-template-columns:auto 1fr; column-gap:12px; row-gap:14px; align-items:start;">' +
+          rowsHtml +
+        '</div>';
+      }
+
+      function renderDetails(info) {
+        if (!info) {
+          detailsEl.innerHTML = '<p style="color:var(--text-dim); margin:0;">Nincs adat erre a napra.</p>';
+          return;
+        }
+
+        if (info.notFound) {
+          detailsEl.innerHTML = '<p style="color:var(--text-dim); margin:0;">Diák nem található ezekben a hónapokban: ' +
+            info.months.join(', ') + '.</p>';
+          return;
+        }
+
+        if (!info.isWorkday) {
+          var untilWork = info.daysUntilWorkDay === null
+            ? 'Nincs több munkanapod ezekben a hónapokban: ' + info.months.join(', ') + '.'
+            : info.daysUntilWorkDay + ' nap múlva munkanapod van.';
+          detailsEl.innerHTML = chipGrid(chipRow('purple', 'Következő munkanap', untilWork));
+          return;
+        }
+
+        var pay = Math.round(info.payFt).toLocaleString('hu-HU') + ' Ft';
+        var bonusBadge = info.isBonusPay ? ' ' + chip('amber', 'emelt bér') : '';
+
+        var untilRest = info.daysUntilRestDay === null
+          ? 'jövő hónapban'
+          : info.daysUntilRestDay + ' nap múlva';
+
+        var coworkersText = info.coworkers.length
+          ? info.coworkers.map(function(c) { return escapeHtml(c.name); }).join(', ')
+          : 'Nincs más diák aznap.';
+
+        var monthDone = info.month.workdaysTotal - info.month.workdaysLeft;
+        var monthFraction = info.month.workdaysTotal ? monthDone / info.month.workdaysTotal : 0;
+        var monthLabel = 'Munkanapok (<span style="text-transform:none;">' + MONTH_ABBR[current.getMonth()] + '</span>)';
+
+        detailsEl.innerHTML =
+          '<div style="margin-bottom:14px;">' +
+            '<div style="font-weight:600; margin-bottom:2px;">' + escapeHtml(info.area) + ' · ' + escapeHtml(info.time) + '</div>' +
+            '<div style="color:var(--text-dim);">' + info.hours + ' óra · ' + pay + bonusBadge + '</div>' +
+          '</div>' +
+          chipGrid(
+            chipRow('blue', 'Munkatársak', coworkersText) +
+            chipRow('purple', 'Következő pihenőnap', untilRest) +
+            chipRow('green', monthLabel, monthDone + ' / ' + info.month.workdaysTotal + progressBar(monthFraction))
+          );
+      }
+
+      function applyInfo(info) {
+        if (info && !info.notFound) {
+          statusEl.textContent = info.isWorkday ? 'Munkanap' : 'Pihenőnap';
+          statusEl.style.background = info.isWorkday ? 'rgba(34,197,94,0.18)' : 'var(--border)';
+          statusEl.style.color = info.isWorkday ? '#86efac' : 'var(--text-dim)';
+          statusEl.style.display = 'inline-block';
+        } else {
+          statusEl.style.display = 'none';
+        }
+        renderDetails(info);
+      }
+
+      // Fetches a day (fire-and-forget) and stores it in the cache. Never
+      // touches the DOM - callers decide whether/when to render it.
+      function fetchIntoCache(iso) {
+        return runScript('getDayInfo', iso, studentName).then(function(info) {
+          dayInfoCache[iso] = info;
+          return info;
+        });
+      }
+
+      function prefetchNeighbors() {
+        var isosToFetch = {}; // dedupe: offsets near a boundary can clamp to the same date
+        for (var offset = -PREFETCH_RADIUS; offset <= PREFETCH_RADIUS; offset++) {
+          if (offset === 0) continue;
+          var d = clamp(new Date(current.getFullYear(), current.getMonth(), current.getDate() + offset));
+          isosToFetch[isoOf(d)] = true;
+        }
+        Object.keys(isosToFetch).forEach(function(iso) {
+          if (!(iso in dayInfoCache)) {
+            fetchIntoCache(iso).catch(function() { /* best-effort prefetch, ignore failures */ });
+          }
+        });
+      }
+
+      function render() {
+        var iso = isoOf(current);
+        var myToken = ++requestToken;
+
+        var isToday = current.getTime() === today.getTime();
+        titleEl.textContent = isToday ? 'Ma' : pad(current.getMonth() + 1) + '.' + pad(current.getDate());
+        todayBtn.style.display = isToday ? 'none' : 'inline-block';
+
+        setButtonState(prevBtn, current.getTime() <= min.getTime());
+        setButtonState(nextBtn, current.getTime() >= max.getTime());
+
+        if (iso in dayInfoCache) {
+          applyInfo(dayInfoCache[iso]); // instant, no loading flash
+        } else {
+          statusEl.style.display = 'none';
+          detailsEl.innerHTML = '<p style="color:var(--text-dim); margin:0;">Betöltés…</p>';
+        }
+
+        // Always fetches, even on a cache hit, to keep data fresh - but only
+        // applies the result to the UI if the user hasn't moved on since.
+        fetchIntoCache(iso).then(function(info) {
+          if (myToken === requestToken) applyInfo(info);
+        });
+
+        prefetchNeighbors();
+      }
+
+      prevBtn.addEventListener('click', function() {
+        current = clamp(new Date(current.getFullYear(), current.getMonth(), current.getDate() - 1));
+        render();
+      });
+
+      nextBtn.addEventListener('click', function() {
+        current = clamp(new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1));
+        render();
+      });
+
+      todayBtn.addEventListener('click', function() {
+        current = new Date(today);
+        render();
+      });
+
+      if (mountedInApp) appState.activePageController = render;
+
+      render();
+    }
+  })();
+</script>
