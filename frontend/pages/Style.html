@@ -1,0 +1,73 @@
+<style>
+:root {
+  --bg: #14181c;
+  --surface: #1c2126;
+  --border: #2a3037;
+  --text: #e8ebee;
+  --text-dim: #8b95a1;
+  --accent: #0082c3;
+
+  --ratio: 1.618;
+  --fs-sm: 1rem;
+  --fs-md: calc(var(--fs-sm) * var(--ratio));
+  --fs-lg: calc(var(--fs-sm) * var(--ratio) * var(--ratio));
+  --fs-xl: calc(var(--fs-sm) * var(--ratio) * var(--ratio) * var(--ratio));
+
+  --rounding: 6px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.navbar-title {
+  font-weight: 600;
+  font-size: var(--fs-md);
+  letter-spacing: 0.02em;
+  margin-right: auto;
+}
+
+.navbar-title span {
+  color: var(--accent);
+}
+
+.nav-items {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nav-items .active {
+  color: var(--text);
+  background: var(--border);
+}
+
+.button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  padding: 8px 14px;
+  border-radius: var(--rounding);
+  cursor: pointer;
+}
+
+.button:hover {
+  color: var(--text);
+}
+</style>
